@@ -1,133 +1,166 @@
+
 import os
 import secrets
-import string
-import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import jwt
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 from pwdlib import PasswordHash
-from sqlalchemy import create_engine, String, Integer, Boolean, DateTime, ForeignKey, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker, Session
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    Float,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Text,
+    text,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-# =====================================================
+
+# ==================================================
 # CONFIGURACIÓN
-# =====================================================
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+# ==================================================
+
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", "")
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://krmaverse.github.io").split(",") if origin.strip()]
 
 if not DATABASE_URL:
-    raise RuntimeError("Falta DATABASE_URL en las variables de entorno de Render.")
+    raise RuntimeError("Falta configurar DATABASE_URL en Render.")
 
-if len(JWT_SECRET) < 32:
-    raise RuntimeError("JWT_SECRET debe tener al menos 32 caracteres.")
-if len(ADMIN_SECRET) < 24:
-    raise RuntimeError("ADMIN_SECRET debe tener al menos 24 caracteres.")
+if not JWT_SECRET:
+    raise RuntimeError("Falta configurar JWT_SECRET en Render.")
 
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://", "postgresql+psycopg://", 1
+    )
 elif DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://", "postgresql+psycopg://", 1
+    )
 
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_recycle=300,
-    connect_args={"connect_timeout": 10},
+    connect_args={"connect_timeout": 15},
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
+
+Base = declarative_base()
 password_hash = PasswordHash.recommended()
 
 
-class Base(DeclarativeBase):
-    pass
-
+# ==================================================
+# MODELOS DE BASE DE DATOS
+# ==================================================
 
 class User(Base):
-    __tablename__ = "store_users"
+    __tablename__ = "users"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(100))
-    email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
-    referral_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
-    referred_by_id: Mapped[Optional[str]] = mapped_column(ForeignKey("store_users.id"), nullable=True)
-    referral_rewarded: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(120), nullable=False)
+    email = Column(String(180), unique=True, index=True, nullable=False)
+    password = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class Coupon(Base):
-    __tablename__ = "store_coupons"
+class Product(Base):
+    __tablename__ = "products"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("store_users.id"), index=True)
-    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
-    amount_off: Mapped[int] = mapped_column(Integer, default=3000)
-    redeemed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    order_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(180), nullable=False)
+    description = Column(Text, default="")
+    category = Column(String(100), default="Digital")
+    price = Column(Float, nullable=False, default=0)
+    image = Column(Text, default="")
+    active = Column(Boolean, default=True)
 
 
 class Order(Base):
-    __tablename__ = "store_orders"
+    __tablename__ = "orders"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("store_users.id"), index=True)
-    product_id: Mapped[str] = mapped_column(String(20))
-    product_name: Mapped[str] = mapped_column(String(180))
-    subtotal: Mapped[int] = mapped_column(Integer)
-    discount: Mapped[int] = mapped_column(Integer, default=0)
-    discount_label: Mapped[str] = mapped_column(String(100), default="")
-    total: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-    coupon_id: Mapped[Optional[str]] = mapped_column(ForeignKey("store_coupons.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    customer_name = Column(String(120), nullable=False)
+    customer_email = Column(String(180), nullable=True)
+    product_name = Column(String(180), nullable=False)
+    quantity = Column(Integer, default=1)
+    total = Column(Float, nullable=False)
+    status = Column(String(40), default="pendiente")
+    payment_reference = Column(String(180), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
-Base.metadata.create_all(bind=engine)
+# ==================================================
+# ESQUEMAS DE SOLICITUD
+# ==================================================
 
-app = FastAPI(title="KrmaVerso Store API", version="1.1.0")
+class RegisterData(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
 
-allowed_origins = [
-    value.strip().rstrip("/")
-    for value in os.getenv(
-        "CORS_ORIGINS",
-        "https://krmaverse.github.io,http://localhost:8000"
-    ).split(",")
-    if value.strip()
-]
+
+class LoginData(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class OrderData(BaseModel):
+    product_id: int | None = None
+    customer_name: str | None = None
+    customer_email: EmailStr | None = None
+    product_name: str | None = None
+    quantity: int = 1
+    total: float | None = None
+    payment_reference: str | None = None
+
+
+class ProductData(BaseModel):
+    name: str
+    description: str = ""
+    category: str = "Digital"
+    price: float
+    image: str = ""
+    active: bool = True
+
+
+# ==================================================
+# APLICACIÓN FASTAPI
+# ==================================================
+
+app = FastAPI(
+    title="KRMA VERSO API",
+    description="Backend oficial de KRMA VERSO Store",
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Admin-Secret"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
-class RegisterIn(BaseModel):
-    name: str = Field(min_length=2, max_length=100)
-    email: EmailStr
-    password: str = Field(min_length=10, max_length=128)
-    referral_code: Optional[str] = Field(default=None, max_length=20)
-    accept_data_policy: bool
-
-
-class LoginIn(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=1, max_length=128)
-
-
-class OrderIn(BaseModel):
-    product_id: str = Field(min_length=1, max_length=20)
-
+# ==================================================
+# CONEXIÓN A BASE DE DATOS
+# ==================================================
 
 def get_db():
     db = SessionLocal()
@@ -137,317 +170,402 @@ def get_db():
         db.close()
 
 
-def make_referral_code(db: Session) -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    for _ in range(30):
-        code = "KRMA-" + "".join(secrets.choice(alphabet) for _ in range(7))
-        if not db.scalar(select(User.id).where(User.referral_code == code)):
-            return code
-    raise HTTPException(500, "No fue posible crear tu código. Intenta de nuevo.")
+@app.on_event("startup")
+def startup():
+    # Fallar el despliegue si PostgreSQL no conecta; no anunciar un servicio sano sin BD.
+    with engine.begin() as connection:
+        connection.execute(text("SELECT 1"))
+    Base.metadata.create_all(bind=engine)
+    print("Base de datos KRMA VERSO conectada y tablas verificadas.")
 
 
-def make_coupon_code(db: Session) -> str:
-    chars = string.ascii_uppercase + string.digits
-    for _ in range(30):
-        code = "AMIGO-" + "".join(secrets.choice(chars) for _ in range(7))
-        if not db.scalar(select(Coupon.id).where(Coupon.code == code)):
-            return code
-    raise HTTPException(500, "No fue posible generar el cupón. Intenta nuevamente.")
+# ==================================================
+# AUTENTICACIÓN
+# ==================================================
 
+def create_token(user_id: int):
+    expiration = datetime.now(timezone.utc) + timedelta(days=7)
 
-def token_for(user: User) -> str:
-    now = datetime.now(timezone.utc)
-    return jwt.encode(
-        {"sub": user.id, "iat": now, "exp": now + timedelta(hours=12)},
-        JWT_SECRET,
-        algorithm="HS256"
-    )
+    payload = {
+        "sub": str(user_id),
+        "exp": expiration,
+    }
+
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
 
 def get_current_user(
-    authorization: Optional[str] = Header(default=None),
-    db: Session = Depends(get_db)
-) -> User:
+    authorization: str = Header(default=None),
+    db: Session = Depends(get_db),
+):
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "Inicia sesión para continuar.")
+        raise HTTPException(
+            status_code=401,
+            detail="Token de autenticación requerido",
+        )
+
+    token = authorization.replace("Bearer ", "", 1)
+
     try:
-        payload = jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
-        user_id = payload.get("sub")
-    except jwt.PyJWTError:
-        raise HTTPException(401, "Sesión vencida. Inicia sesión nuevamente.")
-    user = db.get(User, user_id) if user_id else None
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+        )
+        user_id = int(payload["sub"])
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Sesión inválida o vencida",
+        )
+
+    user = db.query(User).filter(User.id == user_id).first()
+
     if not user:
-        raise HTTPException(401, "No se encontró la cuenta.")
+        raise HTTPException(
+            status_code=401,
+            detail="Usuario no encontrado",
+        )
+
     return user
 
 
-def require_admin(x_admin_secret: Optional[str] = Header(default=None)):
-    if not secrets.compare_digest(x_admin_secret or "", ADMIN_SECRET):
-        raise HTTPException(403, "Clave administrativa incorrecta.")
+def verify_admin(
+    x_admin_secret: str = Header(default=None),
+):
+    if not ADMIN_SECRET or not x_admin_secret:
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso administrativo no autorizado",
+        )
+
+    if not secrets.compare_digest(x_admin_secret, ADMIN_SECRET):
+        raise HTTPException(
+            status_code=403,
+            detail="Clave administrativa incorrecta",
+        )
+
+    return True
 
 
-def catalog():
-    import json
-    from pathlib import Path
-    path = Path(__file__).parent / "catalog.json"
-    if not path.exists():
-        raise HTTPException(500, "No se encontró catalog.json junto a main.py.")
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        raise HTTPException(500, "No fue posible leer catalog.json.")
-    if not isinstance(data, list):
-        raise HTTPException(500, "catalog.json debe contener una lista de productos.")
-    return data
-
-
-def public_user(user: User, db: Session):
-    now = datetime.now(timezone.utc)
-    paid_count = db.scalar(
-        select(Order.id).where(Order.user_id == user.id, Order.status == "paid").limit(1)
-    )
-    coupons = db.scalars(
-        select(Coupon).where(
-            Coupon.user_id == user.id,
-            Coupon.redeemed.is_(False),
-            Coupon.expires_at > now
-        ).order_by(Coupon.created_at.desc())
-    ).all()
-    orders = db.scalars(
-        select(Order).where(Order.user_id == user.id)
-        .order_by(Order.created_at.desc()).limit(25)
-    ).all()
-    return {
-        "name": user.name,
-        "email": user.email,
-        "referral_code": user.referral_code,
-        "referral_link": (
-            "https://krmaverse.github.io/KrmaVerso-Store/tienda.html?ref="
-            + user.referral_code + "#cuenta"
-        ),
-        "first_purchase_available": paid_count is None,
-        "coupons": [
-            {"code": c.code, "amount_off": c.amount_off, "expires_at": c.expires_at.isoformat()}
-            for c in coupons
-        ],
-        "orders": [
-            {
-                "id": o.id,
-                "product_name": o.product_name,
-                "subtotal": o.subtotal,
-                "discount": o.discount,
-                "discount_label": o.discount_label,
-                "total": o.total,
-                "status": o.status,
-                "created_at": o.created_at.isoformat(),
-            }
-            for o in orders
-        ],
-    }
-
+# ==================================================
+# RUTAS PRINCIPALES
+# ==================================================
 
 @app.get("/")
 def home():
-    return {"service": "KrmaVerso Store API", "status": "ok", "docs": "/docs"}
+    return {
+        "message": "KRMA VERSO Store API funcionando",
+        "status": "online",
+        "version": "1.0.0",
+    }
 
 
 @app.get("/health")
 def health():
     try:
         with engine.connect() as connection:
-            connection.exec_driver_sql("SELECT 1")
-        return {"status": "ok", "database": "connected"}
+            connection.execute(text("SELECT 1"))
     except Exception:
-        raise HTTPException(503, "La base de datos no está disponible.")
+        raise HTTPException(status_code=503, detail="PostgreSQL no está disponible")
+    return {"status": "ok", "database": "connected", "service": "KRMA VERSO Backend"}
 
+
+# ==================================================
+# CATÁLOGO
+# ==================================================
 
 @app.get("/api/catalog")
-def get_catalog():
-    return catalog()
-
-
-@app.post("/api/auth/register")
-def register(data: RegisterIn, db: Session = Depends(get_db)):
-    if not data.accept_data_policy:
-        raise HTTPException(400, "Debes aceptar el tratamiento de datos.")
-    email = str(data.email).lower().strip()
-    if db.scalar(select(User.id).where(User.email == email)):
-        raise HTTPException(409, "Ese correo ya está registrado. Inicia sesión.")
-
-    referrer = None
-    if data.referral_code:
-        code = data.referral_code.strip().upper()
-        referrer = db.scalar(select(User).where(User.referral_code == code))
-        if not referrer:
-            raise HTTPException(400, "El código de referido no existe.")
-
-    user = User(
-        name=data.name.strip(),
-        email=email,
-        password_hash=password_hash.hash(data.password),
-        referral_code=make_referral_code(db),
-        referred_by_id=referrer.id if referrer else None,
+def get_catalog(db: Session = Depends(get_db)):
+    products = (
+        db.query(Product)
+        .filter(Product.active == True)
+        .order_by(Product.id.desc())
+        .all()
     )
-    try:
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    except Exception:
-        db.rollback()
-        raise HTTPException(409, "No fue posible crear la cuenta. Verifica si el correo ya existe.")
-    return {"access_token": token_for(user), "token_type": "bearer", "user": public_user(user, db)}
 
-
-@app.post("/api/auth/login")
-def login(data: LoginIn, db: Session = Depends(get_db)):
-    user = db.scalar(select(User).where(User.email == str(data.email).lower().strip()))
-    if not user or not password_hash.verify(data.password, user.password_hash):
-        raise HTTPException(401, "Correo o contraseña incorrectos.")
-    return {"access_token": token_for(user), "token_type": "bearer", "user": public_user(user, db)}
-
-
-@app.get("/api/me")
-def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return public_user(user, db)
-
-
-@app.post("/api/orders")
-def create_order(data: OrderIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # Bloquea la fila del usuario para reducir el riesgo de pedidos simultáneos.
-    locked_user = db.scalar(select(User).where(User.id == user.id).with_for_update())
-    if not locked_user:
-        raise HTTPException(401, "No se encontró la cuenta.")
-
-    pending = db.scalar(
-        select(Order).where(Order.user_id == user.id, Order.status == "pending").limit(1)
-    )
-    if pending:
-        raise HTTPException(409, "Tienes un pedido pendiente. Cancélalo o contacta con soporte.")
-
-    item = next((p for p in catalog() if str(p.get("id")) == data.product_id), None)
-    if not item or item.get("precio") is None:
-        raise HTTPException(404, "Este artículo requiere cotización por WhatsApp.")
-    if not isinstance(item.get("nombre"), str):
-        raise HTTPException(500, "El producto del catálogo no tiene un nombre válido.")
-
-    subtotal = int(item["precio"])
-    if subtotal <= 0:
-        raise HTTPException(400, "El precio del producto no es válido.")
-
-    paid_count = db.scalar(
-        select(Order.id).where(Order.user_id == user.id, Order.status == "paid").limit(1)
-    )
-    discount, label, coupon = 0, "", None
-
-    if paid_count is None:
-        discount = round(subtotal * 0.10)
-        label = "Descuento de primera compra (10%)"
-    else:
-        now = datetime.now(timezone.utc)
-        coupon = db.scalar(
-            select(Coupon).where(
-                Coupon.user_id == user.id,
-                Coupon.redeemed.is_(False),
-                Coupon.expires_at > now,
-            ).order_by(Coupon.amount_off.desc()).with_for_update().limit(1)
-        )
-        if coupon:
-            discount = min(subtotal, coupon.amount_off)
-            label = "Cupón de referido"
-
-    total = max(0, subtotal - discount)
-    order = Order(
-        user_id=user.id,
-        product_id=str(item["id"]),
-        product_name=item["nombre"],
-        subtotal=subtotal,
-        discount=discount,
-        discount_label=label,
-        total=total,
-        coupon_id=coupon.id if coupon else None,
-    )
-    try:
-        db.add(order)
-        if coupon:
-            coupon.redeemed = True
-            coupon.order_id = order.id
-        db.commit()
-        db.refresh(order)
-    except Exception:
-        db.rollback()
-        raise HTTPException(500, "No fue posible crear el pedido. Intenta nuevamente.")
-
-    return {
-        "order_id": order.id,
-        "product_name": order.product_name,
-        "subtotal": subtotal,
-        "discount": discount,
-        "discount_label": label or "Sin descuento",
-        "total": total,
-        "currency": "COP",
-        "status": "pending",
-        "message": "Pedido creado. Confirma el total con KrmaVerso Store antes de pagar.",
-    }
-
-
-@app.post("/api/orders/{order_id}/cancel")
-def cancel_order(order_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    order = db.scalar(
-        select(Order).where(Order.id == order_id, Order.user_id == user.id).with_for_update()
-    )
-    if not order or order.status != "pending":
-        raise HTTPException(404, "No se encontró el pedido pendiente.")
-    if order.coupon_id:
-        coupon = db.get(Coupon, order.coupon_id)
-        if coupon:
-            coupon.redeemed = False
-            coupon.order_id = None
-    order.status = "cancelled"
-    db.commit()
-    return {"ok": True, "message": "Pedido cancelado. Si se utilizó un cupón, quedó disponible nuevamente."}
-
-
-@app.get("/api/admin/orders", dependencies=[Depends(require_admin)])
-def admin_orders(db: Session = Depends(get_db)):
-    rows = db.scalars(
-        select(Order).where(Order.status == "pending")
-        .order_by(Order.created_at.asc()).limit(200)
-    ).all()
     return [
         {
-            "id": o.id,
-            "user_id": o.user_id,
-            "product_name": o.product_name,
-            "subtotal": o.subtotal,
-            "discount": o.discount,
-            "discount_label": o.discount_label,
-            "total": o.total,
-            "created_at": o.created_at.isoformat(),
+            "id": product.id,
+            "name": product.name,
+            "nombre": product.name,
+            "description": product.description,
+            "descripcion": product.description,
+            "category": product.category,
+            "price": product.price,
+            "precio": product.price,
+            "image": product.image,
+            "active": product.active,
         }
-        for o in rows
+        for product in products
     ]
 
 
-@app.post("/api/admin/orders/{order_id}/paid", dependencies=[Depends(require_admin)])
-def mark_paid(order_id: str, db: Session = Depends(get_db)):
-    order = db.scalar(select(Order).where(Order.id == order_id).with_for_update())
-    if not order or order.status != "pending":
-        raise HTTPException(404, "Pedido pendiente no encontrado.")
+@app.post("/api/admin/products")
+def create_product(
+    data: ProductData,
+    db: Session = Depends(get_db),
+    admin: bool = Depends(verify_admin),
+):
+    if data.price < 0:
+        raise HTTPException(status_code=400, detail="Precio inválido")
 
-    order.status = "paid"
-    order.paid_at = datetime.now(timezone.utc)
-    buyer = db.get(User, order.user_id)
-
-    if buyer and buyer.referred_by_id and not buyer.referral_rewarded:
-        expiry = datetime.now(timezone.utc) + timedelta(days=90)
-        for user_id in (buyer.id, buyer.referred_by_id):
-            db.add(Coupon(
-                user_id=user_id,
-                code=make_coupon_code(db),
-                amount_off=3000,
-                expires_at=expiry,
-            ))
-        buyer.referral_rewarded = True
-
+    product = Product(**data.model_dump())
+    db.add(product)
     db.commit()
-    return {"ok": True, "message": "Pago confirmado. Las recompensas de referido se generaron cuando correspondía."}
+    db.refresh(product)
+
+    return {
+        "message": "Producto creado",
+        "id": product.id,
+    }
+
+
+# ==================================================
+# REGISTRO
+# ==================================================
+
+@app.post("/api/auth/register")
+@app.post("/api/register")
+def register(
+    data: RegisterData,
+    db: Session = Depends(get_db),
+):
+    existing = (
+        db.query(User)
+        .filter(User.email == data.email.lower())
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Este correo ya está registrado",
+        )
+
+    if len(data.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="La contraseña debe tener al menos 8 caracteres",
+        )
+
+    user = User(
+        name=data.name.strip(),
+        email=data.email.lower(),
+        password=password_hash.hash(data.password),
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_token(user.id)
+    return {
+        "message": "Cuenta creada correctamente",
+        "token": token,
+        "access_token": token,
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+        },
+    }
+
+
+# ==================================================
+# INICIO DE SESIÓN
+# ==================================================
+
+@app.post("/api/auth/login")
+@app.post("/api/login")
+def login(
+    data: LoginData,
+    db: Session = Depends(get_db),
+):
+    user = (
+        db.query(User)
+        .filter(User.email == data.email.lower())
+        .first()
+    )
+
+    if not user or not password_hash.verify(
+        data.password,
+        user.password,
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Correo o contraseña incorrectos",
+        )
+
+    token = create_token(user.id)
+    return {
+        "message": "Inicio de sesión correcto",
+        "token": token,
+        "access_token": token,
+        "user": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+        },
+    }
+
+
+# ==================================================
+# PERFIL DEL USUARIO
+# ==================================================
+
+@app.get("/api/me")
+def get_me(user: User = Depends(get_current_user)):
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "referral_code": None,
+        "referral_link": None,
+        "first_purchase_available": False,
+        "coupons": [],
+        "orders": [],
+    }
+
+
+# ==================================================
+# PEDIDOS
+# ==================================================
+
+@app.post("/api/orders")
+def create_order(
+    data: OrderData,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if data.quantity < 1:
+        raise HTTPException(status_code=400, detail="Cantidad inválida")
+
+    # El precio y el nombre siempre se toman del catálogo del servidor.
+    if data.product_id is not None:
+        product = db.query(Product).filter(Product.id == data.product_id, Product.active == True).first()
+        if not product:
+            raise HTTPException(status_code=404, detail="Producto no encontrado o no disponible")
+        product_name = product.name
+        total = float(product.price) * data.quantity
+    else:
+        # Compatibilidad temporal con clientes antiguos; no confiar en precios enviados por el navegador.
+        raise HTTPException(status_code=400, detail="Debes seleccionar un producto válido del catálogo")
+
+    order = Order(
+        user_id=user.id,
+        customer_name=(data.customer_name or user.name).strip(),
+        customer_email=data.customer_email or user.email,
+        product_name=product_name,
+        quantity=data.quantity,
+        total=total,
+        payment_reference=data.payment_reference,
+    )
+
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "message": "Pedido creado correctamente",
+        "order_id": order.id,
+        "product_name": order.product_name,
+        "subtotal": total,
+        "discount": 0,
+        "total": total,
+        "status": order.status,
+    }
+
+
+@app.get("/api/orders")
+def get_my_orders(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    orders = (
+        db.query(Order)
+        .filter(Order.user_id == user.id)
+        .order_by(Order.id.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": order.id,
+            "product_name": order.product_name,
+            "quantity": order.quantity,
+            "total": order.total,
+            "status": order.status,
+            "created_at": order.created_at.isoformat(),
+        }
+        for order in orders
+    ]
+
+
+@app.post("/api/orders/{order_id}/cancel")
+def cancel_order(
+    order_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    order = db.query(Order).filter(Order.id == order_id, Order.user_id == user.id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    if order.status != "pendiente":
+        raise HTTPException(status_code=400, detail="Solo se pueden cancelar pedidos pendientes")
+    order.status = "cancelado"
+    db.commit()
+    return {"message": "Pedido cancelado", "order_id": order.id, "status": order.status}
+
+
+# ==================================================
+# ADMINISTRACIÓN DE PEDIDOS
+# ==================================================
+
+@app.get("/api/admin/orders")
+def admin_get_orders(
+    db: Session = Depends(get_db),
+    admin: bool = Depends(verify_admin),
+):
+    orders = db.query(Order).order_by(Order.id.desc()).all()
+
+    return [
+        {
+            "id": order.id,
+            "user_id": order.user_id,
+            "customer_name": order.customer_name,
+            "customer_email": order.customer_email,
+            "product_name": order.product_name,
+            "quantity": order.quantity,
+            "total": order.total,
+            "status": order.status,
+            "payment_reference": order.payment_reference,
+            "created_at": order.created_at.isoformat(),
+        }
+        for order in orders
+    ]
+
+
+@app.post("/api/admin/orders/{order_id}/paid")
+@app.patch("/api/admin/orders/{order_id}/paid")
+def mark_order_paid(
+    order_id: int,
+    db: Session = Depends(get_db),
+    admin: bool = Depends(verify_admin),
+):
+    order = db.query(Order).filter(Order.id == order_id).first()
+
+    if not order:
+        raise HTTPException(
+            status_code=404,
+            detail="Pedido no encontrado",
+        )
+
+    order.status = "pagado"
+    db.commit()
+
+    return {
+        "message": "Pedido marcado como pagado",
+        "order_id": order.id,
+        "status": order.status,
+    }

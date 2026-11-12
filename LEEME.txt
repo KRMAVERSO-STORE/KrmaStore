@@ -1,0 +1,32 @@
+KRMAVERSO STORE - ARCHIVOS HTML CORREGIDOS
+
+ESTE PAQUETE CONTIENE 8 PAGINAS HTML:
+- index.html
+- suscripciones.html
+- cuentas.html
+- perfiles.html
+- aplicaciones.html
+- juegos.html
+- cuenta.html
+- pagos.html
+
+CORRECCION REALIZADA:
+Las paginas ahora cargan los archivos compartidos desde la raiz del repositorio:
+- styles.css
+- config.js
+- app.js
+
+IMPORTANTE:
+En el repositorio KRMAVERSO-STORE/KrmaFree-Store esos tres archivos ya existen en la raiz.
+Por eso este paquete NO los reemplaza ni incluye una carpeta assets.
+Tampoco modifica tienda.html, main.py, Render ni PostgreSQL.
+
+COMO INSTALAR:
+1. Descarga y descomprime este ZIP.
+2. Abre tu repositorio GitHub: KRMAVERSO-STORE/KrmaFree-Store.
+3. En la raiz del repositorio, reemplaza los ocho archivos HTML por los de esta carpeta.
+4. No borres ni reemplaces styles.css, config.js ni app.js que ya estan en la raiz.
+5. Guarda los cambios con Commit changes.
+6. Espera a que GitHub Pages publique y abre la URL configurada en Settings > Pages.
+
+No subas la carpeta completa como una subcarpeta. Los ocho HTML deben quedar directamente en la raiz, al mismo nivel que styles.css, config.js y app.js.
